@@ -94,11 +94,26 @@
             <div><h2>Рендер</h2><p>Экспорт в H.264 MP4 с новыми параметрами обработки.</p></div>
             <span class="panel-badge">04</span>
           </div>
+
           <label class="option-card audio-option">
             <span class="option-icon"><svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15 9a4 4 0 0 1 0 6M18 6a8 8 0 0 1 0 12"/></svg></span>
-            <span class="option-copy"><strong>Сохранить звук</strong><small>При изменении скорости темп и тон меняются вместе с видео</small></span>
+            <span class="option-copy"><strong>Сохранить звук</strong><small id="audioHint">При изменении скорости темп и тон меняются вместе с видео</small></span>
             <input id="preserveAudio" type="checkbox" checked>
           </label>
+
+          <div class="audio-strategy">
+            <label class="field">
+              <span>Стратегия аудио</span>
+              <select id="audioStrategy" class="input">
+                <option value="auto">Авто (по возможностям браузера)</option>
+                <option value="transcode">Перекодировать (темп + питч)</option>
+                <option value="copy">Копировать без изменений</option>
+                <option value="discard">Удалить звук</option>
+              </select>
+            </label>
+            <span id="audioBadge" class="panel-badge">AUTO</span>
+          </div>
+
           <button id="processBtn" class="primary" type="button" disabled>
             <span class="primary-icon"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></span>
             <span>Создать вариант</span>

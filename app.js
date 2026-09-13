@@ -5,6 +5,8 @@ let selectedFile = null;
 let sourceKey = null;
 let currentMode = 'auto';
 let generatedUrls = [];
+let audioCapability = { canDecode: false, canEncode: false, reason: '' };
+let audioStrategy = 'auto'; // auto | transcode | copy | discard
 const noiseStates = new WeakMap();
 
 const $ = (id) => document.getElementById(id);
@@ -13,6 +15,7 @@ const els = {
   modeControl: $('modeControl'), autoOptions: $('autoOptions'), autoZoom: $('autoZoom'), autoPan: $('autoPan'),
   presetSelect: $('presetSelect'), savePresetBtn: $('savePresetBtn'), variantCount: $('variantCount'), formatSelect: $('formatSelect'),
   manualDetails: $('manualDetails'), rangeGrid: $('rangeGrid'), preserveAudio: $('preserveAudio'),
+  audioStrategy: $('audioStrategy'), audioBadge: $('audioBadge'), audioHint: $('audioHint'),
   progressWrap: $('progressWrap'), progressBar: $('progressBar'), progressText: $('progressText'), progressLabel: $('progressLabel'),
   status: $('status'), resultsPanel: $('resultsPanel'), results: $('results'), clearResults: $('clearResults')
 };
@@ -55,6 +58,23 @@ function randomSeed(){ return crypto.getRandomValues(new Uint32Array(1))[0]; }
 function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
 function hexSeed(seed){ return (seed>>>0).toString(16).padStart(8,'0'); }
 
+// ─── Safari / движок ────────────────────────────────────────────────────────
+// UA может врать (Chrome на iOS маскируется под Safari), поэтому проверяем
+// и наличие WebKit-специфичных API, и отсутствие Chromium-маркеров.
+function isSafari(){
+  const ua = navigator.userAgent;
+  const isWebKit = /AppleWebKit/.test(ua);
+  const isChromium = /Chrome|Chromium|Edg|OPR|Brave/.test(ua);
+  const isFirefox = /Firefox|FxiOS/.test(ua);
+  return isWebKit && !isChromium && !isFirefox;
+}
+function isIOS(){
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+function isSafariAudioBroken(){ return isSafari() || isIOS(); }
+
+// ─── Пользовательские пресеты ───────────────────────────────────────────────
 function getUserPresets(){
   try { return JSON.parse(localStorage.getItem('rf_user_presets') || '{}'); } catch { return {}; }
 }
@@ -68,6 +88,7 @@ function loadPresetOptions(){
 }
 function addPresetOption(value,text){ const o=document.createElement('option'); o.value=value;o.textContent=text;els.presetSelect.appendChild(o); }
 
+// ─── Диапазоны ──────────────────────────────────────────────────────────────
 function currentRanges(){
   const out={};
   for(const key of Object.keys(RANGE_DEFS)){
@@ -104,8 +125,7 @@ function positiveWindow(minValue,maxValue,minWidth,maxWidth){
   return [round(start,4),round(Math.min(maxValue,start+width),4)];
 }
 
-// АВТО: скорость всегда уходит от 1.0 в диапазон ±0.3…±1.5% (и питч аудио уходит вместе с ней),
-// edge crop строго 1–6 px, grain гарантированно > 0 — noise пересоздаётся под новый seed.
+// АВТО: speed ±0.3…±1.5% (питч уходит вместе), edge crop 1–6 px, grain > 0.
 function autoRanges(){
   const zoom=els.autoZoom.checked ? positiveWindow(1.045,1.145,.020,.050) : [1,1];
   const panX=els.autoPan.checked ? signedWindow(2.8,7.5,1.5,3.0) : [0,0];
@@ -162,6 +182,7 @@ function applyPresetValue(value){
   els.manualDetails.open=true;
 }
 
+// ─── История ────────────────────────────────────────────────────────────────
 function getHistory(key){
   try { return JSON.parse(localStorage.getItem(`rf_history_${key}`) || '[]'); } catch { return []; }
 }
@@ -195,6 +216,7 @@ function generateRecipe(ranges,history,file){
   return r;
 }
 
+// ─── Fingerprint ────────────────────────────────────────────────────────────
 async function sourceFingerprint(file){
   const chunk=2*1024*1024;
   const pieces=[];
@@ -209,12 +231,14 @@ async function sourceFingerprint(file){
   return [...dig.slice(0,10)].map(x=>x.toString(16).padStart(2,'0')).join('');
 }
 
+// ─── Прогресс / статус ──────────────────────────────────────────────────────
 function setProgress(value,label){
   els.progressWrap.classList.remove('hidden');
   const p=Math.round(clamp(value,0,1)*100); els.progressBar.style.width=`${p}%`; els.progressText.textContent=`${p}%`; if(label) els.progressLabel.textContent=label;
 }
 function setStatus(text,error=false){ els.status.textContent=text; els.status.classList.toggle('error',error); }
 
+// ─── Canvas / фильтры ───────────────────────────────────────────────────────
 function makeCanvas(w,h){
   if(typeof OffscreenCanvas!=='undefined') return new OffscreenCanvas(w,h);
   const c=document.createElement('canvas'); c.width=w;c.height=h;return c;
@@ -294,6 +318,7 @@ function drawCover(drawFn,srcW,srcH,ctx,outW,outH,recipe,phase=0){
   drawGrain(ctx,recipe,outW,outH,phase);
 }
 
+// ─── Аудио ──────────────────────────────────────────────────────────────────
 function retimeAudioSample(sample,speed,AudioSample,baseTimestamp){
   const channels=sample.numberOfChannels;
   const inFrames=sample.numberOfFrames;
@@ -318,6 +343,47 @@ function retimeAudioSample(sample,speed,AudioSample,baseTimestamp){
   });
 }
 
+// Решаем, что делать с аудио, на основе стратегии и возможностей браузера.
+function resolveAudioStrategy(){
+  if(!els.preserveAudio.checked) return 'discard';
+  if(audioStrategy==='discard') return 'discard';
+  if(audioStrategy==='copy') return 'copy';
+  if(audioStrategy==='transcode') return 'transcode';
+  // auto
+  if(isSafariAudioBroken()) return 'copy';
+  if(audioCapability.canDecode && audioCapability.canEncode) return 'transcode';
+  return 'copy';
+}
+
+function updateAudioBadge(){
+  if(!els.audioBadge) return;
+  const strat = resolveAudioStrategy();
+  const map = {
+    transcode: { text:'TRANSCODE', color:'accent' },
+    copy:      { text:'COPY',      color:'' },
+    discard:   { text:'OFF',       color:'' }
+  };
+  const info = map[strat] || map.discard;
+  els.audioBadge.textContent = info.text;
+  els.audioBadge.classList.toggle('accent', info.color==='accent');
+
+  if(!els.audioHint) return;
+  if(!els.preserveAudio.checked){
+    els.audioHint.textContent = 'Звук будет удалён из результата.';
+    return;
+  }
+  if(strat==='copy'){
+    els.audioHint.textContent = isSafariAudioBroken()
+      ? 'Safari: аудио копируется без изменения скорости/питча (системный AAC-декодер нестабилен).'
+      : 'Аудио копируется в исходном кодеке (без перекодирования).';
+  } else if(strat==='transcode'){
+    els.audioHint.textContent = 'Аудио перекодируется в AAC, скорость и питч меняются вместе с видео.';
+  } else {
+    els.audioHint.textContent = 'Звук будет удалён из результата.';
+  }
+}
+
+// ─── Рендер видео ───────────────────────────────────────────────────────────
 async function renderVideo(file,recipe,onProgress){
   const {Input,Output,Conversion,ALL_FORMATS,BlobSource,Mp4OutputFormat,BufferTarget,Quality,VideoSample,AudioSample} = MB;
   const input=new Input({source:new BlobSource(file),formats:ALL_FORMATS});
@@ -342,16 +408,29 @@ async function renderVideo(file,recipe,onProgress){
       return new VideoSample(canvas,{timestamp:Math.max(0,(sample.timestamp-start)/speed),duration:sample.duration/speed});
     }
   };
+
+  const strategy = resolveAudioStrategy();
   let firstAudioTimestamp=null;
-  const audioOpts=els.preserveAudio.checked ? {
-    codec:'aac', quality:new Quality('high'), forceTranscode:true,
-    process:(sample)=>{
-      if(Math.abs(speed-1)<.0001) return sample;
-      if(firstAudioTimestamp===null) firstAudioTimestamp=sample.timestamp;
-      return retimeAudioSample(sample,speed,AudioSample,firstAudioTimestamp);
-    }
-  } : {discard:true};
-  const conversion=await Conversion.init({input,output,tracks:'primary',video:videoOpts,audio:audioOpts,trim:{start,end},copy:false,tags:{},showWarnings:false});
+  let audioOpts;
+  if(strategy==='discard'){
+    audioOpts = { discard: true };
+  } else if(strategy==='copy'){
+    audioOpts = { copy: true };
+  } else {
+    audioOpts = {
+      codec:'aac', quality:new Quality('high'), forceTranscode:true,
+      process:(sample)=>{
+        if(Math.abs(speed-1)<.0001) return sample;
+        if(firstAudioTimestamp===null) firstAudioTimestamp=sample.timestamp;
+        return retimeAudioSample(sample,speed,AudioSample,firstAudioTimestamp);
+      }
+    };
+  }
+
+  const conversion=await Conversion.init({
+    input,output,tracks:'primary',video:videoOpts,audio:audioOpts,
+    trim:{start,end},copy:false,tags:{},showWarnings:false
+  });
   if(!conversion.isValid) throw new Error('Этот кодек браузер не может перекодировать');
   conversion.onProgress=(p)=>onProgress?.(p);
   await conversion.execute();
@@ -359,6 +438,7 @@ async function renderVideo(file,recipe,onProgress){
   return new Blob([output.target.buffer],{type:'video/mp4'});
 }
 
+// ─── Рендер фото ────────────────────────────────────────────────────────────
 async function loadImage(file){
   const url=URL.createObjectURL(file);
   try{
@@ -385,8 +465,10 @@ async function renderPhoto(file,recipe,onProgress){
   return new Blob([output.target.buffer],{type:'video/mp4'});
 }
 
+// ─── Хеш результата ─────────────────────────────────────────────────────────
 async function sha256Blob(blob){ const data=new Uint8Array(await blob.arrayBuffer()); const dig=new Uint8Array(await crypto.subtle.digest('SHA-256',data)); return [...dig.slice(0,8)].map(v=>v.toString(16).padStart(2,'0')).join(''); }
 
+// ─── Один прогон ────────────────────────────────────────────────────────────
 async function renderOne(index,total){
   const ranges=currentRanges();
   const history=getHistory(sourceKey);
@@ -404,6 +486,7 @@ async function renderOne(index,total){
   return {blob,recipe,hash};
 }
 
+// ─── Вывод результата ───────────────────────────────────────────────────────
 function addResult(result,n){
   els.resultsPanel.classList.remove('hidden');
   const url=URL.createObjectURL(result.blob);generatedUrls.push(url);
@@ -416,12 +499,48 @@ function addResult(result,n){
   els.results.prepend(card);
 }
 
+// ─── Главный процесс ────────────────────────────────────────────────────────
+function isSafariAudioError(err){
+  const msg = String(err?.message || err || '').toLowerCase();
+  return msg.includes('internalaudiodecodercocoa') ||
+         msg.includes('audio decoding failed') ||
+         msg.includes('audio decoder') ||
+         msg.includes('aac');
+}
+
 async function processSelected(){
   if(!selectedFile||!MB) return;
   els.processBtn.disabled=true; setStatus('');
   const count=Number(els.variantCount.value);
   try{
-    for(let i=0;i<count;i++){ const res=await renderOne(i,count); addResult(res,i+1); }
+    for(let i=0;i<count;i++){
+      try{
+        const res=await renderOne(i,count);
+        addResult(res,i+1);
+      }catch(err){
+        // Если Safari упал на аудио и стратегия была transcode — переключаемся на copy и пробуем ещё раз.
+        if(isSafariAudioError(err) && resolveAudioStrategy()==='transcode'){
+          console.warn('[ReelForge] Safari AAC error — fallback to copy', err);
+          audioStrategy='copy';
+          updateAudioBadge();
+          setStatus('Аудио-декодер Safari отклонил поток. Повтор с копированием аудио без перекодирования…', false);
+          const res=await renderOne(i,count);
+          addResult(res,i+1);
+          continue;
+        }
+        // Второй fallback — вообще без аудио.
+        if(isSafariAudioError(err) && resolveAudioStrategy()==='copy'){
+          console.warn('[ReelForge] Safari AAC error on copy — dropping audio', err);
+          audioStrategy='discard';
+          updateAudioBadge();
+          setStatus('Аудио-дорожка несовместима — вариант будет без звука.', false);
+          const res=await renderOne(i,count);
+          addResult(res,i+1);
+          continue;
+        }
+        throw err;
+      }
+    }
     setProgress(1,'Готово'); setStatus(`Создано вариантов: ${count}.`);
   }catch(err){ console.error(err); setStatus(err?.message||String(err),true); }
   finally{ els.processBtn.disabled=false; }
@@ -434,6 +553,7 @@ async function handleFile(file){
   els.processBtn.disabled=!MB; setStatus(MB?'Готово к обработке':'Медиа-движок ещё загружается');
 }
 
+// ─── Слушатели ──────────────────────────────────────────────────────────────
 els.pickBtn.addEventListener('click',()=>els.fileInput.click());
 els.fileInput.addEventListener('change',()=>handleFile(els.fileInput.files?.[0]));
 els.modeControl.addEventListener('click',(e)=>{
@@ -450,16 +570,48 @@ els.presetSelect.addEventListener('change',()=>applyPresetValue(els.presetSelect
 els.savePresetBtn.addEventListener('click',()=>{ const name=prompt('Название пресета');if(!name)return;const id=`p_${Date.now()}`;const all=getUserPresets();all[id]={name,ranges:currentRanges()};localStorage.setItem('rf_user_presets',JSON.stringify(all));loadPresetOptions();els.presetSelect.value=`user:${id}`;applyPresetValue(`user:${id}`); });
 els.processBtn.addEventListener('click',processSelected);
 els.clearResults.addEventListener('click',()=>{generatedUrls.forEach(URL.revokeObjectURL);generatedUrls=[];els.results.innerHTML='';els.resultsPanel.classList.add('hidden');});
+els.preserveAudio.addEventListener('change', updateAudioBadge);
+if(els.audioStrategy){
+  els.audioStrategy.addEventListener('change',()=>{
+    audioStrategy = els.audioStrategy.value;
+    updateAudioBadge();
+  });
+}
+
 loadPresetOptions();renderRanges(autoRanges());
 
 if('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('./sw.js').catch(()=>{});
 
+// ─── Инициализация ──────────────────────────────────────────────────────────
 (async()=>{
   try{
     if(typeof VideoEncoder==='undefined'||typeof VideoDecoder==='undefined') throw new Error('WebCodecs недоступен');
     MB=await import(MB_URL);
     const canVideo=await MB.canEncodeVideo('avc',{width:720,height:1280});
     if(!canVideo) throw new Error('H.264 encoder недоступен');
+
+    // Проверяем аудио-возможности. Safari часто возвращает true на encode, но падает на decode.
+    try{
+      audioCapability.canDecode = await MB.canDecodeAudio('aac', { sampleRate: 44100, numberOfChannels: 2 });
+    }catch{ audioCapability.canDecode = false; }
+    try{
+      audioCapability.canEncode = await MB.canEncodeAudio('aac', { sampleRate: 44100, numberOfChannels: 2 });
+    }catch{ audioCapability.canEncode = false; }
+
+    // На Safari AAC-decode формально "есть", но реально падает (internalaudiodecodercocoa).
+    // Принудительно ставим стратегию copy.
+    if(isSafariAudioBroken()){
+      audioStrategy='copy';
+      if(els.audioStrategy) els.audioStrategy.value='copy';
+    } else if(audioCapability.canDecode && audioCapability.canEncode){
+      audioStrategy='auto';
+      if(els.audioStrategy) els.audioStrategy.value='auto';
+    } else {
+      audioStrategy='copy';
+      if(els.audioStrategy) els.audioStrategy.value='copy';
+    }
+    updateAudioBadge();
+
     if(selectedFile) els.processBtn.disabled=false;
   }catch(err){
     console.error(err);setStatus('Этот браузер не даёт кодировать H.264. На iPhone нужен актуальный Safari/iOS.',true);
