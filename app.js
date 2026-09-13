@@ -395,17 +395,26 @@ async function renderVideo(file,recipe,onProgress){
   const outW=reels?1080:Math.max(2,Math.round(originalW/2)*2); const outH=reels?1920:Math.max(2,Math.round(originalH/2)*2);
   const output=new Output({format:new Mp4OutputFormat({fastStart:'in-memory'}),target:new BufferTarget()});
   let canvas,ctx;
+  let processedFrames=0;
+  let firstVideoTimestamp=null;
   const speed=recipe.speed || 1;
   const start=Math.min(recipe.trimStart,Math.max(0,duration-.2));
   const end=Math.max(start+.1,duration-recipe.trimEnd);
   const videoOpts={
-    codec:'avc', quality:new Quality('high'), forceTranscode:true, processedWidth:outW, processedHeight:outH,
+    codec:'avc', quality:new Quality('high'), forceTranscode:true,
+    width:outW, height:outH, fit:'fill', allowRotationMetadata:false,
+    processedWidth:outW, processedHeight:outH,
     process:(sample)=>{
       if(!canvas){canvas=makeCanvas(outW,outH);ctx=canvas.getContext('2d',{alpha:false});}
-      const phase=clamp((sample.timestamp-start)/Math.max(.001,end-start),0,1);
+      if(firstVideoTimestamp===null) firstVideoTimestamp=sample.timestamp;
+      const relativeTimestamp=Math.max(0,sample.timestamp-firstVideoTimestamp);
+      const phase=clamp(relativeTimestamp/Math.max(.001,end-start),0,1);
       drawCover((sx,sy,sw,sh,x,y,w,h)=>sample.draw(ctx,sx,sy,sw,sh,x,y,w,h),sample.displayWidth,sample.displayHeight,ctx,outW,outH,recipe,phase);
-      if(Math.abs(speed-1)<.0001) return canvas;
-      return new VideoSample(canvas,{timestamp:Math.max(0,(sample.timestamp-start)/speed),duration:sample.duration/speed});
+      processedFrames++;
+      return new VideoSample(canvas,{
+        timestamp:relativeTimestamp/speed,
+        duration:sample.duration/speed
+      });
     }
   };
 
@@ -415,7 +424,7 @@ async function renderVideo(file,recipe,onProgress){
   if(strategy==='discard'){
     audioOpts = { discard: true };
   } else if(strategy==='copy'){
-    audioOpts = { copy: true };
+    audioOpts = {};
   } else {
     audioOpts = {
       codec:'aac', quality:new Quality('high'), forceTranscode:true,
@@ -429,11 +438,12 @@ async function renderVideo(file,recipe,onProgress){
 
   const conversion=await Conversion.init({
     input,output,tracks:'primary',video:videoOpts,audio:audioOpts,
-    trim:{start,end},copy:false,tags:{},showWarnings:false
+    trim:{start,end},copy:{mode:'preferred'},tags:{},showWarnings:false
   });
   if(!conversion.isValid) throw new Error('Этот кодек браузер не может перекодировать');
   conversion.onProgress=(p)=>onProgress?.(p);
   await conversion.execute();
+  if(processedFrames===0) throw new Error('Видео не прошло через обработчик кадров');
   input.dispose?.();
   return new Blob([output.target.buffer],{type:'video/mp4'});
 }
@@ -470,7 +480,8 @@ async function sha256Blob(blob){ const data=new Uint8Array(await blob.arrayBuffe
 
 // ─── Один прогон ────────────────────────────────────────────────────────────
 async function renderOne(index,total){
-  const ranges=currentRanges();
+  const ranges=currentMode==='auto' ? autoRanges() : currentRanges();
+  if(currentMode==='auto') renderRanges(ranges);
   const history=getHistory(sourceKey);
   const recipe=generateRecipe(ranges,history,selectedFile);
   const seedHex=hexSeed(recipe.seed);
