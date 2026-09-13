@@ -14,8 +14,7 @@ const els = {
   presetSelect: $('presetSelect'), savePresetBtn: $('savePresetBtn'), variantCount: $('variantCount'), formatSelect: $('formatSelect'),
   manualDetails: $('manualDetails'), rangeGrid: $('rangeGrid'), preserveAudio: $('preserveAudio'),
   progressWrap: $('progressWrap'), progressBar: $('progressBar'), progressText: $('progressText'), progressLabel: $('progressLabel'),
-  status: $('status'), resultsPanel: $('resultsPanel'), results: $('results'), clearResults: $('clearResults'),
-  networkState: $('networkState'), historyCount: $('historyCount')
+  status: $('status'), resultsPanel: $('resultsPanel'), results: $('results'), clearResults: $('clearResults')
 };
 
 const RANGE_DEFS = {
@@ -159,7 +158,7 @@ function getHistory(key){
   try { return JSON.parse(localStorage.getItem(`rf_history_${key}`) || '[]'); } catch { return []; }
 }
 function saveHistory(key,items){ localStorage.setItem(`rf_history_${key}`,JSON.stringify(items.slice(-24))); updateHistoryCount(); }
-function updateHistoryCount(){ els.historyCount.textContent=sourceKey ? getHistory(sourceKey).length : '0'; }
+function updateHistoryCount(){}
 
 function recipeDistance(a,b,ranges){
   const keys=['zoom','panX','panY','edgeCrop','grain','brightness','contrast','saturation','temperature','gamma','speed','trimStart','trimEnd','detail'];
@@ -420,8 +419,6 @@ async function handleFile(file){
   els.processBtn.disabled=!MB; setStatus(MB?'Готово к обработке':'Медиа-движок ещё загружается');
 }
 
-function networkLabel(){ els.networkState.textContent=navigator.onLine?'Доступна':'Офлайн'; }
-
 els.pickBtn.addEventListener('click',()=>els.fileInput.click());
 els.fileInput.addEventListener('change',()=>handleFile(els.fileInput.files?.[0]));
 els.modeControl.addEventListener('click',(e)=>{ const b=e.target.closest('button[data-mode]');if(!b)return;applyMode(b.dataset.mode); });
@@ -431,8 +428,6 @@ els.presetSelect.addEventListener('change',()=>applyPresetValue(els.presetSelect
 els.savePresetBtn.addEventListener('click',()=>{ const name=prompt('Название пресета');if(!name)return;const id=`p_${Date.now()}`;const all=getUserPresets();all[id]={name,ranges:currentRanges()};localStorage.setItem('rf_user_presets',JSON.stringify(all));loadPresetOptions();els.presetSelect.value=`user:${id}`;applyPresetValue(`user:${id}`); });
 els.processBtn.addEventListener('click',processSelected);
 els.clearResults.addEventListener('click',()=>{generatedUrls.forEach(URL.revokeObjectURL);generatedUrls=[];els.results.innerHTML='';els.resultsPanel.classList.add('hidden');});
-window.addEventListener('online',networkLabel);window.addEventListener('offline',networkLabel);networkLabel();
-
 loadPresetOptions();renderRanges(autoRanges());
 
 if('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('./sw.js').catch(()=>{});

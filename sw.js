@@ -1,4 +1,4 @@
-const CACHE='reelforge-pwa-8';
+const CACHE='reelforge-pwa-9';
 const LOCAL=['./','./index.html','./styles.css','./app.js','./manifest.webmanifest','./icons/favicon-32.png','./icons/apple-touch-icon.png','./icons/icon-192.png','./icons/icon-512.png'];
 const EXTERNAL=['https://cdn.jsdelivr.net/npm/mediabunny@1.56.1/dist/bundles/mediabunny.min.mjs'];
 self.addEventListener('install',e=>e.waitUntil((async()=>{const c=await caches.open(CACHE);await c.addAll(LOCAL);for(const u of EXTERNAL){try{const r=await fetch(u,{mode:'cors'});if(r.ok)await c.put(u,r);}catch{}}self.skipWaiting();})()));
