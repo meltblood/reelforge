@@ -21,16 +21,18 @@ const els = {
 };
 
 const RANGE_DEFS = {
-  zoom:       { label: 'Zoom', unit: '×', min: 1.0, max: 1.18, step: .001 },
+  zoom:       { label: 'Zoom', unit: '×', min: 1.0, max: 1.28, step: .001 },
   panX:       { label: 'Смещение X', unit: '%', min: -8, max: 8, step: .1 },
   panY:       { label: 'Смещение Y', unit: '%', min: -8, max: 8, step: .1 },
-  edgeCrop:   { label: 'Обрезка краёв', unit: 'px', min: 0, max: 32, step: 1 },
-  grain:      { label: 'Grain / шум', unit: '%', min: 0, max: 7, step: .1 },
-  brightness: { label: 'Яркость', unit: '%', min: -12, max: 12, step: .1 },
-  contrast:   { label: 'Контраст', unit: '%', min: -16, max: 20, step: .1 },
-  saturation: { label: 'Насыщенность', unit: '%', min: -16, max: 20, step: .1 },
-  temperature:{ label: 'Температура', unit: '%', min: -10, max: 10, step: .1 },
-  gamma:      { label: 'Гамма', unit: '', min: .88, max: 1.12, step: .001 },
+  tilt:       { label: 'Наклон', unit: '°', min: -2, max: 2, step: .1 },
+  edgeCrop:   { label: 'Обрезка краёв', unit: 'px', min: 0, max: 40, step: 1 },
+  grain:      { label: 'Grain / шум', unit: '%', min: 0, max: 10, step: .1 },
+  vignette:   { label: 'Виньетка', unit: '%', min: 0, max: 24, step: .1 },
+  brightness: { label: 'Яркость', unit: '%', min: -18, max: 18, step: .1 },
+  contrast:   { label: 'Контраст', unit: '%', min: -24, max: 28, step: .1 },
+  saturation: { label: 'Насыщенность', unit: '%', min: -24, max: 28, step: .1 },
+  temperature:{ label: 'Температура', unit: '%', min: -16, max: 16, step: .1 },
+  gamma:      { label: 'Гамма', unit: '', min: .84, max: 1.16, step: .001 },
   speed:      { label: 'Скорость / тон', unit: '×', min: .96, max: 1.04, step: .001 },
   trimStart:  { label: 'Обрезка начала', unit: 'с', min: 0, max: 1.0, step: .01 },
   trimEnd:    { label: 'Обрезка конца', unit: 'с', min: 0, max: 1.0, step: .01 },
@@ -38,7 +40,7 @@ const RANGE_DEFS = {
 };
 
 const MANUAL_DEFAULTS = {
-  zoom:[1.04,1.10], panX:[-4.8,4.8], panY:[-3.8,3.8], edgeCrop:[4,12], grain:[1.8,4.2],
+  zoom:[1.04,1.10], panX:[-4.8,4.8], panY:[-3.8,3.8], tilt:[-.7,.7], edgeCrop:[4,12], grain:[1.8,4.2], vignette:[3,9],
   brightness:[-5.5,5.5], contrast:[-9.5,12], saturation:[-9.5,12], temperature:[-5.5,5.5],
   gamma:[.93,1.07], speed:[.985,1.015], trimStart:[.12,.52], trimEnd:[.10,.42], detail:[6,14]
 };
@@ -127,19 +129,21 @@ function positiveWindow(minValue,maxValue,minWidth,maxWidth){
 
 // АВТО: speed ±0.3…±1.5% (питч уходит вместе), edge crop 1–6 px, grain > 0.
 function autoRanges(){
-  const zoom=els.autoZoom.checked ? positiveWindow(1.045,1.145,.020,.050) : [1,1];
-  const panX=els.autoPan.checked ? signedWindow(2.8,7.5,1.5,3.0) : [0,0];
-  const panY=els.autoPan.checked ? signedWindow(2.0,5.5,1.1,2.4) : [0,0];
-  const gamma=pick([positiveWindow(.90,.955,.018,.035),positiveWindow(1.045,1.10,.018,.035)]);
+  const zoom=els.autoZoom.checked ? positiveWindow(1.10,1.22,.035,.070) : [1,1];
+  const panX=els.autoPan.checked ? signedWindow(4.5,8,1.2,2.5) : [0,0];
+  const panY=els.autoPan.checked ? signedWindow(3.5,7,1.2,2.5) : [0,0];
+  const tilt=els.autoPan.checked ? signedWindow(.65,1.45,.20,.50) : [0,0];
+  const gamma=pick([positiveWindow(.85,.925,.025,.045),positiveWindow(1.075,1.15,.025,.045)]);
   const speed=pick([positiveWindow(.985,.997,.003,.007),positiveWindow(1.003,1.015,.003,.007)]);
   return {
-    zoom, panX, panY,
-    edgeCrop:positiveWindow(1,6,.5,2),
-    grain:positiveWindow(2.5,5.5,1.0,2.0),
-    brightness:signedWindow(3.2,8.5,1.7,3.5),
-    contrast:signedWindow(5.5,14,2.8,5.5),
-    saturation:signedWindow(5.5,14,2.8,5.5),
-    temperature:signedWindow(3.3,8.5,1.7,3.5),
+    zoom, panX, panY, tilt,
+    edgeCrop:positiveWindow(8,22,3,7),
+    grain:positiveWindow(4.5,8,1.2,2.5),
+    vignette:positiveWindow(10,20,3,6),
+    brightness:signedWindow(6,13,2.5,5),
+    contrast:signedWindow(11,22,4,8),
+    saturation:signedWindow(11,22,4,8),
+    temperature:signedWindow(7,14,2.5,5),
     gamma, speed,
     trimStart:positiveWindow(.12,.55,.08,.20),
     trimEnd:positiveWindow(.10,.42,.07,.16),
@@ -190,7 +194,7 @@ function saveHistory(key,items){ localStorage.setItem(`rf_history_${key}`,JSON.s
 function updateHistoryCount(){}
 
 function recipeDistance(a,b,ranges){
-  const keys=['zoom','panX','panY','edgeCrop','grain','brightness','contrast','saturation','temperature','gamma','speed','trimStart','trimEnd','detail'];
+  const keys=['zoom','panX','panY','tilt','edgeCrop','grain','vignette','brightness','contrast','saturation','temperature','gamma','speed','trimStart','trimEnd','detail'];
   let total=0,used=0;
   for(const k of keys){
     if(a[k]==null||b[k]==null) continue;
@@ -302,7 +306,16 @@ function drawCover(drawFn,srcW,srcH,ctx,outW,outH,recipe,phase=0){
   ctx.clearRect(0,0,outW,outH);
   ctx.fillStyle='#000';ctx.fillRect(0,0,outW,outH);
   applyFrameStyle(ctx,recipe);
-  drawFn(sx,sy,sw,sh,x,y,dw,dh);
+  const tilt=(Number(recipe.tilt)||0)*(0.55+0.45*Math.sin(phase*Math.PI/2));
+  const drawTransformed=(ox=0,oy=0,ow=0,oh=0)=>{
+    ctx.save();
+    ctx.translate(outW/2,outH/2);
+    ctx.rotate(tilt*Math.PI/180);
+    ctx.translate(-outW/2,-outH/2);
+    drawFn(sx,sy,sw,sh,x+ox,y+oy,dw+ow,dh+oh);
+    ctx.restore();
+  };
+  drawTransformed();
   ctx.filter='none';
   if(recipe.temperature!==0){
     ctx.globalCompositeOperation='source-atop';
@@ -312,10 +325,18 @@ function drawCover(drawFn,srcW,srcH,ctx,outW,outH,recipe,phase=0){
   }
   if(recipe.detail>0){
     ctx.globalAlpha=Math.min(.095,recipe.detail/160);ctx.globalCompositeOperation='overlay';
-    drawFn(sx,sy,sw,sh,x-.4,y-.4,dw+.8,dh+.8);
+    drawTransformed(-.7,-.7,1.4,1.4);
     ctx.globalCompositeOperation='source-over';ctx.globalAlpha=1;
   }
   drawGrain(ctx,recipe,outW,outH,phase);
+  if(recipe.vignette>0){
+    const strength=clamp(recipe.vignette,0,24)/100;
+    const gradient=ctx.createRadialGradient(outW/2,outH/2,Math.min(outW,outH)*.18,outW/2,outH/2,Math.hypot(outW,outH)*.58);
+    gradient.addColorStop(0,'rgba(0,0,0,0)');
+    gradient.addColorStop(.62,'rgba(0,0,0,0)');
+    gradient.addColorStop(1,`rgba(0,0,0,${Math.min(.42,strength*2.1)})`);
+    ctx.fillStyle=gradient;ctx.fillRect(0,0,outW,outH);
+  }
 }
 
 // ─── Аудио ──────────────────────────────────────────────────────────────────
@@ -397,7 +418,8 @@ async function renderVideo(file,recipe,onProgress){
   let canvas,ctx;
   let processedFrames=0;
   let firstVideoTimestamp=null;
-  const speed=recipe.speed || 1;
+  const strategy = resolveAudioStrategy();
+  const speed=strategy==='copy' ? 1 : (recipe.speed || 1);
   const start=Math.min(recipe.trimStart,Math.max(0,duration-.2));
   const end=Math.max(start+.1,duration-recipe.trimEnd);
   const videoOpts={
@@ -418,7 +440,6 @@ async function renderVideo(file,recipe,onProgress){
     }
   };
 
-  const strategy = resolveAudioStrategy();
   let firstAudioTimestamp=null;
   let audioOpts;
   if(strategy==='discard'){
@@ -438,7 +459,7 @@ async function renderVideo(file,recipe,onProgress){
 
   const conversion=await Conversion.init({
     input,output,tracks:'primary',video:videoOpts,audio:audioOpts,
-    trim:{start,end},copy:{mode:'preferred'},tags:{},showWarnings:false
+    trim:{start,end},copy:{mode:'preferred',boundaryPolicy:'shrink'},tags:{},showWarnings:false
   });
   if(!conversion.isValid) throw new Error('Этот кодек браузер не может перекодировать');
   conversion.onProgress=(p)=>onProgress?.(p);
@@ -484,6 +505,7 @@ async function renderOne(index,total){
   if(currentMode==='auto') renderRanges(ranges);
   const history=getHistory(sourceKey);
   const recipe=generateRecipe(ranges,history,selectedFile);
+  if(!selectedFile.type.startsWith('image/') && resolveAudioStrategy()==='copy') recipe.speed=1;
   const seedHex=hexSeed(recipe.seed);
   const spd=(recipe.speed||1).toFixed(4);
   const pitch=(((recipe.speed||1)-1)*100).toFixed(2);
@@ -506,7 +528,7 @@ function addResult(result,n){
   const seedHex=hexSeed(recipe.seed);
   const speed=(recipe.speed||1);
   const pitchPct=((speed-1)*100).toFixed(2);
-  card.innerHTML=`<video controls playsinline src="${url}"></video><div class="result-body"><div class="result-meta mono">#${n} · seed ${seedHex} · ${result.hash}<br>zoom ${recipe.zoom.toFixed(3)}× · crop ${Math.round(recipe.edgeCrop||0)}px · grain ${(recipe.grain||0).toFixed(1)}% · speed ${speed.toFixed(4)}× (pitch ${pitchPct}%) · C ${recipe.contrast.toFixed(1)} · S ${recipe.saturation.toFixed(1)}</div><div class="result-actions"><a class="action" download="reelforge-${result.hash}.mp4" href="${url}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0l-4-4m4 4l4-4"/><path d="M5 19h14"/></svg><span>Сохранить MP4</span></a></div></div>`;
+  card.innerHTML=`<video controls playsinline src="${url}"></video><div class="result-body"><div class="result-meta mono">#${n} · seed ${seedHex} · ${result.hash}<br>zoom ${recipe.zoom.toFixed(3)}× · tilt ${(recipe.tilt||0).toFixed(1)}° · crop ${Math.round(recipe.edgeCrop||0)}px · grain ${(recipe.grain||0).toFixed(1)}% · vignette ${(recipe.vignette||0).toFixed(1)}% · speed ${speed.toFixed(4)}× (pitch ${pitchPct}%) · C ${recipe.contrast.toFixed(1)} · S ${recipe.saturation.toFixed(1)}</div><div class="result-actions"><a class="action" download="reelforge-${result.hash}.mp4" href="${url}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0l-4-4m4 4l4-4"/><path d="M5 19h14"/></svg><span>Сохранить MP4</span></a></div></div>`;
   els.results.prepend(card);
 }
 
