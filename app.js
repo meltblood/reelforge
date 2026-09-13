@@ -52,6 +52,14 @@ const BUILTIN_PRESETS = {
   cropOff: { name:'Без Zoom / Pan', ranges:{...clone(MANUAL_DEFAULTS), zoom:[1,1], panX:[0,0], panY:[0,0], edgeCrop:[1,5], grain:[2,4.5], contrast:[-10,12], saturation:[-10,12], temperature:[-6,6], detail:[7,15]} }
 };
 
+const COLOR_GRADES = {
+  tealOrange: { label:'Teal / Orange', shadow:'#075b69', highlight:'#ff8b47', alpha:.42 },
+  warmFilm:   { label:'Тёплая плёнка', shadow:'#4b2548', highlight:'#ffc060', alpha:.38 },
+  coldSteel:  { label:'Холодная сталь', shadow:'#142b5c', highlight:'#8dd8e8', alpha:.40 },
+  filmGreen:  { label:'Зелёная плёнка', shadow:'#174738', highlight:'#e8bd72', alpha:.38 },
+  berryDusk:  { label:'Пурпурный закат', shadow:'#492154', highlight:'#ef7272', alpha:.36 }
+};
+
 function clone(v){ return JSON.parse(JSON.stringify(v)); }
 function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
 function rnd(a,b){ return a + Math.random()*(b-a); }
@@ -209,6 +217,7 @@ function generateRecipe(ranges,history,file){
   for(let attempt=0;attempt<60;attempt++){
     const r={seed:randomSeed(),createdAt:Date.now()};
     for(const [key,rg] of Object.entries(ranges)) r[key]=round(rnd(rg[0],rg[1]),4);
+    r.colorGrade=currentMode==='auto' ? pick(Object.keys(COLOR_GRADES)) : 'neutral';
     if(file.type.startsWith('image/')){ r.speed=1; r.trimStart=0; r.trimEnd=0; }
     const recipeHistory=history.map(x=>x.recipe).filter(Boolean);
     const minDistance=currentMode==='auto'?.060:.025;
@@ -216,6 +225,7 @@ function generateRecipe(ranges,history,file){
   }
   const r={seed:randomSeed(),createdAt:Date.now()};
   for(const [key,rg] of Object.entries(ranges)) r[key]=round(rnd(rg[0],rg[1]),4);
+  r.colorGrade=currentMode==='auto' ? pick(Object.keys(COLOR_GRADES)) : 'neutral';
   if(file.type.startsWith('image/')){ r.speed=1; r.trimStart=0; r.trimEnd=0; }
   return r;
 }
@@ -290,6 +300,28 @@ function drawGrain(ctx,recipe,outW,outH,phase){
   if(pattern){ctx.fillStyle=pattern;ctx.fillRect(0,0,outW,outH);}
   ctx.restore();
 }
+function applyColorGrade(ctx,recipe,outW,outH){
+  const grade=COLOR_GRADES[recipe.colorGrade];
+  if(!grade) return;
+  ctx.save();
+  ctx.globalCompositeOperation='soft-light';
+  ctx.globalAlpha=grade.alpha;
+  const split=ctx.createLinearGradient(0,outH,outW,0);
+  split.addColorStop(0,grade.shadow);
+  split.addColorStop(.46,'#777777');
+  split.addColorStop(.54,'#888888');
+  split.addColorStop(1,grade.highlight);
+  ctx.fillStyle=split;
+  ctx.fillRect(0,0,outW,outH);
+  ctx.globalCompositeOperation='overlay';
+  ctx.globalAlpha=.10;
+  const light=ctx.createRadialGradient(outW*.68,outH*.22,0,outW*.68,outH*.22,Math.hypot(outW,outH)*.72);
+  light.addColorStop(0,grade.highlight);
+  light.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=light;
+  ctx.fillRect(0,0,outW,outH);
+  ctx.restore();
+}
 function drawCover(drawFn,srcW,srcH,ctx,outW,outH,recipe,phase=0){
   const maxCrop=Math.max(0,Math.floor(Math.min(srcW,srcH)/4));
   const edge=clamp(Math.round(recipe.edgeCrop||0),0,maxCrop);
@@ -323,6 +355,7 @@ function drawCover(drawFn,srcW,srcH,ctx,outW,outH,recipe,phase=0){
     ctx.fillStyle=warm?`rgba(255,116,50,${alpha})`:`rgba(70,130,255,${alpha})`;
     ctx.fillRect(0,0,outW,outH);ctx.globalCompositeOperation='source-over';
   }
+  applyColorGrade(ctx,recipe,outW,outH);
   if(recipe.detail>0){
     ctx.globalAlpha=Math.min(.095,recipe.detail/160);ctx.globalCompositeOperation='overlay';
     drawTransformed(-.7,-.7,1.4,1.4);
@@ -528,7 +561,8 @@ function addResult(result,n){
   const seedHex=hexSeed(recipe.seed);
   const speed=(recipe.speed||1);
   const pitchPct=((speed-1)*100).toFixed(2);
-  card.innerHTML=`<video controls playsinline src="${url}"></video><div class="result-body"><div class="result-meta mono">#${n} · seed ${seedHex} · ${result.hash}<br>zoom ${recipe.zoom.toFixed(3)}× · tilt ${(recipe.tilt||0).toFixed(1)}° · crop ${Math.round(recipe.edgeCrop||0)}px · grain ${(recipe.grain||0).toFixed(1)}% · vignette ${(recipe.vignette||0).toFixed(1)}% · speed ${speed.toFixed(4)}× (pitch ${pitchPct}%) · C ${recipe.contrast.toFixed(1)} · S ${recipe.saturation.toFixed(1)}</div><div class="result-actions"><a class="action" download="reelforge-${result.hash}.mp4" href="${url}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0l-4-4m4 4l4-4"/><path d="M5 19h14"/></svg><span>Сохранить MP4</span></a></div></div>`;
+  const grade=COLOR_GRADES[recipe.colorGrade]?.label || 'Нейтральный';
+  card.innerHTML=`<video controls playsinline src="${url}"></video><div class="result-body"><div class="result-meta mono">#${n} · seed ${seedHex} · ${result.hash}<br>цветокор ${grade} · zoom ${recipe.zoom.toFixed(3)}× · tilt ${(recipe.tilt||0).toFixed(1)}° · crop ${Math.round(recipe.edgeCrop||0)}px · grain ${(recipe.grain||0).toFixed(1)}% · vignette ${(recipe.vignette||0).toFixed(1)}% · speed ${speed.toFixed(4)}× (pitch ${pitchPct}%) · C ${recipe.contrast.toFixed(1)} · S ${recipe.saturation.toFixed(1)}</div><div class="result-actions"><a class="action" download="reelforge-${result.hash}.mp4" href="${url}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0l-4-4m4 4l4-4"/><path d="M5 19h14"/></svg><span>Сохранить MP4</span></a></div></div>`;
   els.results.prepend(card);
 }
 
