@@ -42,9 +42,9 @@ const MANUAL_DEFAULTS = {
 
 const BUILTIN_PRESETS = {
   balanced: { name:'Сбалансированный', ranges: clone(MANUAL_DEFAULTS) },
-  motion: { name:'Кадр и движение', ranges:{...clone(MANUAL_DEFAULTS), zoom:[1.06,1.13], panX:[-6.5,6.5], panY:[-5,5], edgeCrop:[5,14], grain:[1.5,3.2]} },
-  clean: { name:'Цвет и детали', ranges:{...clone(MANUAL_DEFAULTS), zoom:[1.025,1.06], panX:[-2.5,2.5], panY:[-2,2], edgeCrop:[3,8], grain:[1.2,2.6], contrast:[-11,13], saturation:[-11,13], temperature:[-6,6], gamma:[.92,1.08], detail:[8,15]} },
-  cropOff: { name:'Без Zoom / Pan', ranges:{...clone(MANUAL_DEFAULTS), zoom:[1,1], panX:[0,0], panY:[0,0], edgeCrop:[5,12], grain:[2,4.5], contrast:[-10,12], saturation:[-10,12], temperature:[-6,6], detail:[7,15]} }
+  motion: { name:'Кадр и движение', ranges:{...clone(MANUAL_DEFAULTS), zoom:[1.06,1.13], panX:[-6.5,6.5], panY:[-5,5], edgeCrop:[3,6], grain:[1.5,3.2]} },
+  clean: { name:'Цвет и детали', ranges:{...clone(MANUAL_DEFAULTS), zoom:[1.025,1.06], panX:[-2.5,2.5], panY:[-2,2], edgeCrop:[1,4], grain:[1.2,2.6], contrast:[-11,13], saturation:[-11,13], temperature:[-6,6], gamma:[.92,1.08], detail:[8,15]} },
+  cropOff: { name:'Без Zoom / Pan', ranges:{...clone(MANUAL_DEFAULTS), zoom:[1,1], panX:[0,0], panY:[0,0], edgeCrop:[1,5], grain:[2,4.5], contrast:[-10,12], saturation:[-10,12], temperature:[-6,6], detail:[7,15]} }
 };
 
 function clone(v){ return JSON.parse(JSON.stringify(v)); }
@@ -53,6 +53,7 @@ function rnd(a,b){ return a + Math.random()*(b-a); }
 function round(v,n=4){ const p=10**n; return Math.round(v*p)/p; }
 function randomSeed(){ return crypto.getRandomValues(new Uint32Array(1))[0]; }
 function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+function hexSeed(seed){ return (seed>>>0).toString(16).padStart(8,'0'); }
 
 function getUserPresets(){
   try { return JSON.parse(localStorage.getItem('rf_user_presets') || '{}'); } catch { return {}; }
@@ -102,16 +103,18 @@ function positiveWindow(minValue,maxValue,minWidth,maxWidth){
   const start=rnd(minValue,Math.max(minValue,maxValue-width));
   return [round(start,4),round(Math.min(maxValue,start+width),4)];
 }
+
+// АВТО: скорость всегда уходит от 1.0 в диапазон ±0.3…±1.5% (и питч аудио уходит вместе с ней),
+// edge crop строго 1–6 px, grain гарантированно > 0 — noise пересоздаётся под новый seed.
 function autoRanges(){
   const zoom=els.autoZoom.checked ? positiveWindow(1.045,1.145,.020,.050) : [1,1];
   const panX=els.autoPan.checked ? signedWindow(2.8,7.5,1.5,3.0) : [0,0];
   const panY=els.autoPan.checked ? signedWindow(2.0,5.5,1.1,2.4) : [0,0];
   const gamma=pick([positiveWindow(.90,.955,.018,.035),positiveWindow(1.045,1.10,.018,.035)]);
-  // Speed stays subtle, but never lands exactly on 1.0 in AUTO.
   const speed=pick([positiveWindow(.985,.997,.003,.007),positiveWindow(1.003,1.015,.003,.007)]);
   return {
     zoom, panX, panY,
-    edgeCrop:positiveWindow(6,18,3,7),
+    edgeCrop:positiveWindow(1,6,.5,2),
     grain:positiveWindow(2.5,5.5,1.0,2.0),
     brightness:signedWindow(3.2,8.5,1.7,3.5),
     contrast:signedWindow(5.5,14,2.8,5.5),
@@ -123,11 +126,16 @@ function autoRanges(){
     detail:positiveWindow(6.5,15,2.5,5)
   };
 }
-function randomizeAutoRanges(){
+function randomizeAutoRanges(notify=false){
   if(currentMode!=='auto') return;
-  renderRanges(autoRanges());
+  const ranges=autoRanges();
+  renderRanges(ranges);
   els.manualDetails.open=false;
   els.presetSelect.value='none';
+  if(notify){
+    const spd=`${ranges.speed[0].toFixed(3)}…${ranges.speed[1].toFixed(3)}×`;
+    setStatus(`АВТО: новый набор (speed ${spd} → pitch ${((ranges.speed[0]-1)*100).toFixed(2)}…${((ranges.speed[1]-1)*100).toFixed(2)}%, crop ${ranges.edgeCrop[0]}–${ranges.edgeCrop[1]}px, grain ${ranges.grain[0].toFixed(1)}–${ranges.grain[1].toFixed(1)}%). Нажмите «Создать вариант».`);
+  }
 }
 function applyMode(mode){
   currentMode=mode==='manual'?'manual':'auto';
@@ -138,7 +146,7 @@ function applyMode(mode){
     renderRanges(existing);
     els.manualDetails.open=true;
   }else{
-    randomizeAutoRanges();
+    randomizeAutoRanges(true);
   }
 }
 function applyPresetValue(value){
@@ -183,6 +191,7 @@ function generateRecipe(ranges,history,file){
   }
   const r={seed:randomSeed(),createdAt:Date.now()};
   for(const [key,rg] of Object.entries(ranges)) r[key]=round(rnd(rg[0],rg[1]),4);
+  if(file.type.startsWith('image/')){ r.speed=1; r.trimStart=0; r.trimEnd=0; }
   return r;
 }
 
@@ -382,10 +391,13 @@ async function renderOne(index,total){
   const ranges=currentRanges();
   const history=getHistory(sourceKey);
   const recipe=generateRecipe(ranges,history,selectedFile);
-  setProgress(0,`Вариант ${index+1}/${total}`);
+  const seedHex=hexSeed(recipe.seed);
+  const spd=(recipe.speed||1).toFixed(4);
+  const pitch=(((recipe.speed||1)-1)*100).toFixed(2);
+  setProgress(0,`Вариант ${index+1}/${total} · seed ${seedHex} · speed ${spd}× (pitch ${pitch}%)`);
   const blob=selectedFile.type.startsWith('image/')
-    ? await renderPhoto(selectedFile,recipe,p=>setProgress(p,`Вариант ${index+1}/${total}, рендер`))
-    : await renderVideo(selectedFile,recipe,p=>setProgress(p,`Вариант ${index+1}/${total}, рендер`));
+    ? await renderPhoto(selectedFile,recipe,p=>setProgress(p,`Вариант ${index+1}/${total} · seed ${seedHex} · рендер`))
+    : await renderVideo(selectedFile,recipe,p=>setProgress(p,`Вариант ${index+1}/${total} · seed ${seedHex} · рендер`));
   const hash=await sha256Blob(blob);
   history.push({recipe,hash,createdAt:Date.now()});
   saveHistory(sourceKey,history);
@@ -397,7 +409,10 @@ function addResult(result,n){
   const url=URL.createObjectURL(result.blob);generatedUrls.push(url);
   const card=document.createElement('article');card.className='result';
   const recipe=result.recipe;
-  card.innerHTML=`<video controls playsinline src="${url}"></video><div class="result-body"><div class="result-meta mono">#${n} · ${result.hash}<br>zoom ${recipe.zoom.toFixed(3)} · crop ${Math.round(recipe.edgeCrop||0)}px · grain ${(recipe.grain||0).toFixed(1)}% · speed ${(recipe.speed||1).toFixed(3)}× · C ${recipe.contrast.toFixed(1)} · S ${recipe.saturation.toFixed(1)}</div><div class="result-actions"><a class="action" download="reelforge-${result.hash}.mp4" href="${url}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0l-4-4m4 4l4-4"/><path d="M5 19h14"/></svg><span>Сохранить MP4</span></a></div></div>`;
+  const seedHex=hexSeed(recipe.seed);
+  const speed=(recipe.speed||1);
+  const pitchPct=((speed-1)*100).toFixed(2);
+  card.innerHTML=`<video controls playsinline src="${url}"></video><div class="result-body"><div class="result-meta mono">#${n} · seed ${seedHex} · ${result.hash}<br>zoom ${recipe.zoom.toFixed(3)}× · crop ${Math.round(recipe.edgeCrop||0)}px · grain ${(recipe.grain||0).toFixed(1)}% · speed ${speed.toFixed(4)}× (pitch ${pitchPct}%) · C ${recipe.contrast.toFixed(1)} · S ${recipe.saturation.toFixed(1)}</div><div class="result-actions"><a class="action" download="reelforge-${result.hash}.mp4" href="${url}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0l-4-4m4 4l4-4"/><path d="M5 19h14"/></svg><span>Сохранить MP4</span></a></div></div>`;
   els.results.prepend(card);
 }
 
@@ -421,9 +436,16 @@ async function handleFile(file){
 
 els.pickBtn.addEventListener('click',()=>els.fileInput.click());
 els.fileInput.addEventListener('change',()=>handleFile(els.fileInput.files?.[0]));
-els.modeControl.addEventListener('click',(e)=>{ const b=e.target.closest('button[data-mode]');if(!b)return;applyMode(b.dataset.mode); });
-els.autoZoom.addEventListener('change',()=>{ if(currentMode==='auto') randomizeAutoRanges(); });
-els.autoPan.addEventListener('change',()=>{ if(currentMode==='auto') randomizeAutoRanges(); });
+els.modeControl.addEventListener('click',(e)=>{
+  const b=e.target.closest('button[data-mode]');if(!b)return;
+  const sameMode=b.dataset.mode===currentMode;
+  applyMode(b.dataset.mode);
+  if(sameMode && b.dataset.mode==='auto'){
+    setStatus('АВТО: параметры перегенерированы, нажмите «Создать вариант».');
+  }
+});
+els.autoZoom.addEventListener('change',()=>{ if(currentMode==='auto') randomizeAutoRanges(true); });
+els.autoPan.addEventListener('change',()=>{ if(currentMode==='auto') randomizeAutoRanges(true); });
 els.presetSelect.addEventListener('change',()=>applyPresetValue(els.presetSelect.value));
 els.savePresetBtn.addEventListener('click',()=>{ const name=prompt('Название пресета');if(!name)return;const id=`p_${Date.now()}`;const all=getUserPresets();all[id]={name,ranges:currentRanges()};localStorage.setItem('rf_user_presets',JSON.stringify(all));loadPresetOptions();els.presetSelect.value=`user:${id}`;applyPresetValue(`user:${id}`); });
 els.processBtn.addEventListener('click',processSelected);
